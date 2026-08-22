@@ -1,5 +1,5 @@
 const jwt = require("jsonwebtoken");
-const User = require("../models/userModel");
+const productService = require("../services/productService");
 
 const protect = async (req, res, next) => {
   let token;
@@ -24,7 +24,7 @@ const protect = async (req, res, next) => {
       process.env.JWT_SECRET || "productiq_super_secret_jwt_key_2026_secure"
     );
 
-    const user = await User.findById(decoded.id).select("-password");
+    const user = await productService.findUserById(decoded.id);
 
     if (!user) {
       return res.status(401).json({
@@ -60,7 +60,7 @@ const optionalProtect = async (req, res, next) => {
         token,
         process.env.JWT_SECRET || "productiq_super_secret_jwt_key_2026_secure"
       );
-      req.user = await User.findById(decoded.id).select("-password");
+      req.user = await productService.findUserById(decoded.id);
     } catch (e) {
       // Ignore token failure for optional endpoints
     }

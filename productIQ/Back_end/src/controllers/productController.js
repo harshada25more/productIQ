@@ -1,38 +1,11 @@
-const Product = require("../models/productModel");
+const productService = require("../services/productService");
 const { enrichProductData } = require("../services/aiService");
 
 // GET /api/products
 const getProducts = async (req, res) => {
   try {
     const { q, status, category } = req.query;
-    const filter = {};
-
-    if (status && status !== "All Status" && status !== "All") {
-      if (status.toLowerCase() === "review" || status.toLowerCase() === "needs review") {
-        filter.status = { $in: ["Needs Review", "Review"] };
-      } else {
-        filter.status = new RegExp(`^${status}$`, "i");
-      }
-    }
-
-    if (category && category !== "All") {
-      filter.category = new RegExp(category, "i");
-    }
-
-    if (q && q.trim()) {
-      const regex = new RegExp(q.trim(), "i");
-      filter.$or = [
-        { name: regex },
-        { sku: regex },
-        { category: regex },
-        { brand: regex },
-        { material: regex },
-        { product_type: regex },
-        { description: regex },
-      ];
-    }
-
-    const products = await Product.find(filter).sort({ createdAt: -1 });
+    const products = await productService.getProducts({ q, status, category });
 
     res.json({
       success: true,
@@ -52,18 +25,7 @@ const getProducts = async (req, res) => {
 const searchProducts = async (req, res) => {
   try {
     const query = req.query.q || "";
-    const regex = new RegExp(query, "i");
-
-    const results = await Product.find({
-      $or: [
-        { name: regex },
-        { sku: regex },
-        { brand: regex },
-        { category: regex },
-        { material: regex },
-      ],
-    }).sort({ createdAt: -1 });
-
+    const results = await productService.getProducts({ q: query });
     res.json(results);
   } catch (error) {
     res.status(500).json({
@@ -78,16 +40,7 @@ const searchProducts = async (req, res) => {
 const getProductById = async (req, res) => {
   try {
     const { id } = req.params;
-    let product;
-
-    // Check if valid ObjectId or find by SKU / custom query
-    if (id.match(/^[0-9a-fA-F]{24}$/)) {
-      product = await Product.findById(id);
-    } else {
-      product = await Product.findOne({
-        $or: [{ sku: id }, { name: new RegExp(`^${id}$`, "i") }],
-      });
-    }
+    const product = await productService.getProductById(id);
 
     if (!product) {
       return res.status(404).json({
@@ -121,10 +74,8 @@ const createProduct = async (req, res) => {
     }
 
     const enriched = await enrichProductData(req.body);
-    const product = await Product.create({
-      ...enriched,
-      createdBy: req.user ? req.user._id : null,
-    });
+    const userId = req.user ? (req.user._id || req.user.id) : null;
+    const product = await productService.createProduct(enriched, userId);
 
     res.status(201).json({
       success: true,
@@ -162,10 +113,8 @@ const enrichProduct = async (req, res) => {
       technicalData,
     });
 
-    const product = await Product.create({
-      ...enrichedData,
-      createdBy: req.user ? req.user._id : null,
-    });
+    const userId = req.user ? (req.user._id || req.user.id) : null;
+    const product = await productService.createProduct(enrichedData, userId);
 
     res.status(201).json({
       success: true,
@@ -185,7 +134,7 @@ const enrichProduct = async (req, res) => {
 const reEnrichProduct = async (req, res) => {
   try {
     const { id } = req.params;
-    const existing = await Product.findById(id);
+    const existing = await productService.getProductById(id);
 
     if (!existing) {
       return res.status(404).json({
@@ -203,15 +152,15 @@ const reEnrichProduct = async (req, res) => {
       technicalData: existing.technicalData,
     });
 
-    // Update product
-    Object.assign(existing, enriched);
-    existing.status = "Validated";
-    await existing.save();
+    const updated = await productService.updateProduct(id, {
+      ...enriched,
+      status: "Validated",
+    });
 
     res.json({
       success: true,
       message: "Product re-enriched successfully",
-      product: existing,
+      product: updated,
     });
   } catch (error) {
     res.status(500).json({
@@ -225,10 +174,7 @@ const reEnrichProduct = async (req, res) => {
 // GET /api/products/review
 const getReviewProducts = async (req, res) => {
   try {
-    const products = await Product.find({
-      status: { $in: ["Needs Review", "Review"] },
-    }).sort({ createdAt: -1 });
-
+    const products = await productService.getProducts({ status: "Needs Review" });
     res.json(products);
   } catch (error) {
     res.status(500).json({
@@ -243,7 +189,7 @@ const getReviewProducts = async (req, res) => {
 const approveProduct = async (req, res) => {
   try {
     const { id } = req.params;
-    const product = await Product.findById(id);
+    const product = await productService.getProductById(id);
 
     if (!product) {
       return res.status(404).json({
@@ -252,22 +198,22 @@ const approveProduct = async (req, res) => {
       });
     }
 
-    product.status = "Validated";
-    if (product.confidence < 85) {
-      product.confidence = 92;
-    }
-    if (product.validation) {
-      product.validation.score = 94;
-      product.validation.attributeConsistency = "Passed";
-      product.validation.potentialConflicts = 0;
-    }
-
-    await product.save();
+    const updated = await productService.updateProduct(id, {
+      status: "Validated",
+      confidence: Math.max(product.confidence || 85, 92),
+      validation: {
+        score: 94,
+        attributeConsistency: "Passed",
+        technicalSpecification: "Passed",
+        missingInformation: 0,
+        potentialConflicts: 0,
+      },
+    });
 
     res.json({
       success: true,
       message: "Product approved successfully",
-      product,
+      product: updated,
     });
   } catch (error) {
     res.status(500).json({
@@ -282,7 +228,7 @@ const approveProduct = async (req, res) => {
 const rejectProduct = async (req, res) => {
   try {
     const { id } = req.params;
-    const product = await Product.findById(id);
+    const product = await productService.getProductById(id);
 
     if (!product) {
       return res.status(404).json({
@@ -291,13 +237,14 @@ const rejectProduct = async (req, res) => {
       });
     }
 
-    product.status = "Rejected";
-    await product.save();
+    const updated = await productService.updateProduct(id, {
+      status: "Rejected",
+    });
 
     res.json({
       success: true,
       message: "Product rejected",
-      product,
+      product: updated,
     });
   } catch (error) {
     res.status(500).json({
@@ -311,33 +258,10 @@ const rejectProduct = async (req, res) => {
 // GET /api/dashboard/stats
 const getDashboardStats = async (req, res) => {
   try {
-    const total = await Product.countDocuments();
-    const aiEnriched = await Product.countDocuments({
-      confidence: { $gt: 0 },
-    });
-    const validated = await Product.countDocuments({
-      status: "Validated",
-    });
-    const needsReview = await Product.countDocuments({
-      status: { $in: ["Needs Review", "Review"] },
-    });
-
-    const recentProducts = await Product.find()
-      .sort({ createdAt: -1 })
-      .limit(6);
-
-    const healthScore = total > 0
-      ? Math.round((validated / total) * 100)
-      : 87;
-
+    const stats = await productService.getDashboardStats();
     res.json({
       success: true,
-      total_products: total,
-      ai_enriched: aiEnriched,
-      validated: validated,
-      needs_review: needsReview,
-      health_score: healthScore,
-      recent_products: recentProducts,
+      ...stats,
     });
   } catch (error) {
     res.status(500).json({
@@ -351,40 +275,10 @@ const getDashboardStats = async (req, res) => {
 // GET /api/products/health/catalog or /api/catalog-health
 const getCatalogHealth = async (req, res) => {
   try {
-    const total = await Product.countDocuments();
-    const validated = await Product.countDocuments({ status: "Validated" });
-    const needsReview = await Product.countDocuments({
-      status: { $in: ["Needs Review", "Review"] },
-    });
-
-    const products = await Product.find().limit(100);
-    let totalScore = 0;
-    let conflicts = 0;
-
-    for (const p of products) {
-      totalScore += p.confidence || 80;
-      if (p.validation?.potentialConflicts > 0 || p.status === "Needs Review") {
-        conflicts++;
-      }
-    }
-
-    const avgConfidence = products.length > 0
-      ? Math.round(totalScore / products.length)
-      : 88;
-
-    const completeness = 91;
-    const accuracy = avgConfidence;
-    const consistency = 85;
-    const overallScore = Math.round((completeness + accuracy + consistency) / 3);
-
+    const health = await productService.getCatalogHealth();
     res.json({
       success: true,
-      overall_score: overallScore,
-      completeness,
-      accuracy,
-      consistency,
-      needs_review: needsReview,
-      conflicts: conflicts,
+      ...health,
     });
   } catch (error) {
     res.status(500).json({
@@ -407,6 +301,8 @@ const batchEnrichProducts = async (req, res) => {
     }
 
     const created = [];
+    const userId = req.user ? (req.user._id || req.user.id) : null;
+
     for (const item of items) {
       if (!item.name && !item.Part_Desc && !item.description) continue;
       const enriched = await enrichProductData({
@@ -418,10 +314,7 @@ const batchEnrichProducts = async (req, res) => {
         technicalData: item.technicalData || "",
       });
 
-      const doc = await Product.create({
-        ...enriched,
-        createdBy: req.user ? req.user._id : null,
-      });
+      const doc = await productService.createProduct(enriched, userId);
       created.push(doc);
     }
 
@@ -444,7 +337,7 @@ const batchEnrichProducts = async (req, res) => {
 const exportProducts = async (req, res) => {
   try {
     const format = req.query.format || "json";
-    const products = await Product.find().sort({ createdAt: -1 });
+    const products = await productService.getProducts({});
 
     if (format.toLowerCase() === "csv") {
       // Build Expected Output CSV
@@ -502,17 +395,7 @@ const updateProduct = async (req, res) => {
   try {
     const { id } = req.params;
     const updateData = req.body;
-
-    let product;
-    if (id.match(/^[0-9a-fA-F]{24}$/)) {
-      product = await Product.findByIdAndUpdate(id, updateData, { new: true });
-    } else {
-      product = await Product.findOneAndUpdate(
-        { $or: [{ sku: id }, { name: id }] },
-        updateData,
-        { new: true }
-      );
-    }
+    const product = await productService.updateProduct(id, updateData);
 
     if (!product) {
       return res.status(404).json({ success: false, message: "Product not found" });
@@ -536,14 +419,9 @@ const updateProduct = async (req, res) => {
 const deleteProduct = async (req, res) => {
   try {
     const { id } = req.params;
-    let deleted;
-    if (id.match(/^[0-9a-fA-F]{24}$/)) {
-      deleted = await Product.findByIdAndDelete(id);
-    } else {
-      deleted = await Product.findOneAndDelete({ $or: [{ sku: id }, { name: id }] });
-    }
+    const success = await productService.deleteProduct(id);
 
-    if (!deleted) {
+    if (!success) {
       return res.status(404).json({ success: false, message: "Product not found" });
     }
 
@@ -564,24 +442,12 @@ const deleteProduct = async (req, res) => {
 const batchApproveProducts = async (req, res) => {
   try {
     const { ids } = req.body;
-    const filter = ids && ids.length > 0
-      ? { _id: { $in: ids } }
-      : { status: { $in: ["Needs Review", "Review"] } };
-
-    const result = await Product.updateMany(filter, {
-      $set: {
-        status: "Validated",
-        confidence: 94,
-        "validation.score": 94,
-        "validation.attributeConsistency": "Passed",
-        "validation.potentialConflicts": 0,
-      },
-    });
+    const modifiedCount = await productService.batchApprove(ids || []);
 
     res.json({
       success: true,
-      message: `Approved ${result.modifiedCount} products`,
-      modifiedCount: result.modifiedCount,
+      message: `Approved ${modifiedCount} products`,
+      modifiedCount,
     });
   } catch (error) {
     res.status(500).json({
@@ -600,11 +466,11 @@ const batchDeleteProducts = async (req, res) => {
       return res.status(400).json({ success: false, message: "ids array required" });
     }
 
-    const result = await Product.deleteMany({ _id: { $in: ids } });
+    const deletedCount = await productService.batchDelete(ids);
     res.json({
       success: true,
-      message: `Deleted ${result.deletedCount} products`,
-      deletedCount: result.deletedCount,
+      message: `Deleted ${deletedCount} products`,
+      deletedCount,
     });
   } catch (error) {
     res.status(500).json({
@@ -618,46 +484,7 @@ const batchDeleteProducts = async (req, res) => {
 // POST /api/products/sanitize
 const autoSanitizeCatalog = async (req, res) => {
   try {
-    const products = await Product.find();
-    let sanitizedCount = 0;
-
-    for (const p of products) {
-      let changed = false;
-
-      // Fix missing taxonomy classpath
-      if (!p.classpath) {
-        p.classpath = `Industrial & Commercial Products>${p.category || "Industrial"}>${p.product_type || p.name}`;
-        changed = true;
-      }
-
-      // Ensure attributes has material and application
-      if (!p.attributes) p.attributes = {};
-      if (!p.attributes["Material"] && p.material) {
-        p.attributes["Material"] = p.material;
-        changed = true;
-      }
-      if (!p.attributes["Product Type"] && p.product_type) {
-        p.attributes["Product Type"] = p.product_type;
-        changed = true;
-      }
-
-      // Ensure validation object exists
-      if (!p.validation) {
-        p.validation = {
-          score: p.confidence || 85,
-          attributeConsistency: "Passed",
-          technicalSpecification: "Passed",
-          missingInformation: 0,
-          potentialConflicts: 0,
-        };
-        changed = true;
-      }
-
-      if (changed) {
-        await p.save();
-        sanitizedCount++;
-      }
-    }
+    const sanitizedCount = await productService.autoSanitizeCatalog();
 
     res.json({
       success: true,
@@ -676,9 +503,7 @@ const autoSanitizeCatalog = async (req, res) => {
 // POST /api/products/reseed
 const reseedProducts = async (req, res) => {
   try {
-    const seedDatabase = require("../config/seed");
-    await seedDatabase(true);
-    const products = await Product.find().sort({ createdAt: -1 });
+    const products = await productService.reseedCatalog();
 
     res.json({
       success: true,

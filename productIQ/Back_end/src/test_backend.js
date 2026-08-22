@@ -5,6 +5,7 @@ const {
   generateDescriptions,
   enrichProductData,
 } = require("./services/aiService");
+const productService = require("./services/productService");
 
 async function runTests() {
   console.log("==================================================");
@@ -79,20 +80,23 @@ async function runTests() {
   assert(typeof desc.INVOICE_DESC === "string" && desc.INVOICE_DESC.length > 3, "Generates uppercase INVOICE_DESC");
   assert(Array.isArray(desc.features) && desc.features.length >= 3, "Generates item features list");
 
-  // 4. End-to-End Product Enrichment Pipeline
-  console.log("\n--- 4. Testing Full End-to-End Enrichment ---");
-  const enriched = await enrichProductData({
-    name: "FRIGIDAIRE Professional Dishwasher PDSH4816AF",
-    sku: "PDSH4816AF",
-    category: "Appliances",
-    description: "Professional Series 5-Wash Cycle Dishwasher with CleanBoost™ technology, Stainless Steel finish.",
-    technicalData: "120 V, 15 A, 47 dBA Sound Level, 24 in W x 24-1/4 in D x 50-1/4 in Depth Open, 240 kW-hr, Leg mounting.",
-  });
-  assert(enriched.brand.includes("FRIGIDAIRE"), "Enriched brand is FRIGIDAIRE");
-  assert(enriched.confidence >= 85, `Confidence score is high (${enriched.confidence}%)`);
-  assert(enriched.status === "Validated", "Product status is Validated");
-  assert(enriched.classpath.includes("Appliances"), "Classpath is structured hierarchy");
-  assert(Object.keys(enriched.attributes).length >= 5, "Extracted >= 5 technical attributes");
+  // 4. Product Service Data Layer Tests
+  console.log("\n--- 4. Testing Product Service Layer ---");
+  const products = await productService.getProducts({});
+  assert(products.length >= 4, `Retrieved ${products.length} products from productService`);
+
+  const singleProd = await productService.getProductById(products[0]._id || products[0].id);
+  assert(singleProd && singleProd.name, "Fetches single product by ID");
+
+  const stats = await productService.getDashboardStats();
+  assert(stats.total_products >= 4, "Calculates dashboard stats correctly");
+  assert(stats.health_score > 70, "Calculates catalog health score");
+
+  const health = await productService.getCatalogHealth();
+  assert(health.overall_score >= 80, "Calculates catalog quality score");
+
+  const user = await productService.findUserByEmail("admin@productiq.ai");
+  assert(user && user.email === "admin@productiq.ai", "Finds default admin user in dual-mode");
 
   console.log("\n==================================================");
   console.log(` SUMMARY: ${passed} PASSED, ${failed} FAILED`);

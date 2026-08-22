@@ -15,24 +15,24 @@ const {
 
 const app = express();
 
-// Middleware
+// Enable CORS for all origins and headers (needed for Vercel -> Render)
 app.use(
   cors({
     origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
   })
 );
 
 app.use(express.json());
 
-// Root API
+// Root Health & Service API
 app.get("/", (req, res) => {
   res.json({
     name: "ProductIQ API",
     status: "online",
     message: "ProductIQ AI Product Intelligence Backend is running!",
-    version: "1.0.0",
+    version: "2.0.0",
   });
 });
 
@@ -53,7 +53,7 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// Dashboard endpoints
+// Dashboard stats endpoints
 app.get("/dashboard/stats", getDashboardStats);
 app.get("/api/dashboard/stats", getDashboardStats);
 
@@ -61,11 +61,15 @@ app.get("/api/dashboard/stats", getDashboardStats);
 app.get("/catalog-health", getCatalogHealth);
 app.get("/api/catalog-health", getCatalogHealth);
 
-// Main API routes
+// Main API routes (mounted on both /api/... and /... for URL robustness)
 app.use("/api/auth", authRoutes);
+app.use("/auth", authRoutes);
+
 app.use("/api/products", productRoutes);
 app.use("/products", productRoutes);
+
 app.use("/api/ai", aiRoutes);
+app.use("/ai", aiRoutes);
 
 // 404 handler
 app.use((req, res) => {
@@ -77,7 +81,7 @@ app.use((req, res) => {
 
 // Global error handler
 app.use((err, req, res, next) => {
-  console.error("Internal Error:", err);
+  console.error("[Server Error]:", err);
 
   res.status(err.status || 500).json({
     success: false,
