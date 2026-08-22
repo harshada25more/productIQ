@@ -1,4 +1,6 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  "https://productiq-1-1oms.onrender.com/api";
 
 // Standalone in-memory fallback dataset when running frontend standalone
 let mockProducts = [
@@ -454,8 +456,9 @@ export const reseedCatalog = () => {
 };
 
 export const exportCatalogUrl = (format = "csv") => {
-  return `http://localhost:5000/api/products/export?format=${format}`;
+  return `${API_BASE_URL}/products/export?format=${format}`;
 };
+
 
 /* ---------------------------------------
    Health Check
